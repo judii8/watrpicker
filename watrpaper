@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+
+import json
+import os
+import re
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+from gi.repository import Gdk, GdkPixbuf, Gio, GLib, Gtk
+
+APP_ID = "dev.watermelon.watrpicker"
+
+CONFIG_DIR = os.path.expanduser("~/.config/watrpicker")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "config.jsonc")
+CSS_PATH = os.path.join(CONFIG_DIR, "style.css")
+
+DEFAULT_CONFIG = {
+    "backgrounds_path": "/usr/share/backgrounds",
+    "use_script": False,
+    "script_path": "~/.scripts/change-background",
+    "thumbnail_width": 160,
+    "thumbnail_height": 100,
+    "label_text": "Pick Wallpaper",
+}
+
+
+def parse_jsonc(content):
+    content = re.sub(r"//.*", "", content)
+    content = re.sub(r"/\*[\s\S]*?\*/", "", content)
+    content = re.sub(r",(\s*[}\]])", r"\1", content)
+    return json.loads(content)
+
+
+def load_config():
+    if not os.path.exists(CONFIG_DIR):
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+
+    if not os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(DEFAULT_CONFIG, f, indent=4)
+        except OSError as e:
+            print(f"ERR: failed to write default config: {e}", file=sys.stderr)
+
+    config = DEFAULT_CONFIG.copy()
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                user_config = parse_jsonc(f.read())
+                config.update(user_config)
+        except Exception as e:
+            print(f"ERR: failed to parse config file: {e}", file=sys.stderr)
+
+    config["backgrounds_path"] = os.path.expanduser(config["backgrounds_path"])
+    config["script_path"] = os.path.expanduser(config["script_path"])
+    return config
+
+
+def load_css():
+    if not os.path.exists(CSS_PATH):
+        return
+
+    provider = Gtk.CssProvider()
+    try:
+        provider.load_from_path(CSS_PATH)
+        display = Gdk.Display.get_default()
+        Gtk.StyleContext.add_provider_for_display(
+            display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+        )
+    except GLib.Error as e:
+        print(f"ERR: failed to load CSS: {e}", file=sys.stderr)
+
+
+class BgSelectorWindow(Gtk.ApplicationWindow):
+    def __init__(self, app, config):
+        super().__init__(application=app)
+        self.config = config
+        self.selected_path = None
+        self.wallpapers = []
+        self.grid_items = {}
+
+        self.thumb_w = self.config.get("thumbnail_width", 160)
+        self.thumb_h = self.config.get("thumbnail_height", 100)
+
+        self.set_title("watrpicker")
+        self.set_decorated(False)
+        self.set_resizable(False)
+        self.set_name("window")
+        self.set_default_size(580, 480)
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        outer.set_name("outer-box")
+        self.set_child(outer)
+
+        title_text = self.config.get("label_text", "Pick Wallpaper")
+        title = Gtk.Label(label=title_text)
+        title.set_name("menu-title")
+        title.set_halign(Gtk.Align.START)
+        title.set_margin_bottom(12)
+        outer.append(title)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_name("grid-scroll")
+        scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scrolled.set_vexpand(True)
+        scrolled.set_hexpand(True)
+        outer.append(scrolled)
+
+        self.flowbox = Gtk.FlowBox()
+        self.flowbox.set_name("wallpaper-grid")
+        self.flowbox.set_valign(Gtk.Align.START)
+        self.flowbox.set_max_children_per_line(3)
+        self.flowbox.set_min_children_per_line(3)
+        self.flowbox.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.flowbox.connect("child-activated", self.on_item_activated)
+        scrolled.set_child(self.flowbox)
+
+        bottom_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        bottom_bar.set_name("bottom-bar")
+        bottom_bar.set_margin_top(14)
+        outer.append(bottom_bar)
+
+        self.filename_lbl = Gtk.Label(label="No wallpaper selected")
+        self.filename_lbl.set_name("filename")
+        self.filename_lbl.set_halign(Gtk.Align.START)
+        self.filename_lbl.set_hexpand(True)
+        bottom_bar.append(self.filename_lbl)
+
+        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        btn_box.set_name("button-box")
+        bottom_bar.append(btn_box)
+
+        cancel_btn = Gtk.Button(label="Cancel")
+        cancel_btn.set_name("cancel-button")
+        cancel_btn.connect("clicked", lambda *_: self.close())
+        btn_box.append(cancel_btn)
+
+        self.apply_btn = Gtk.Button(label="Apply")
+        self.apply_btn.set_name("apply-button")
+        self.apply_btn.set_sensitive(False)
+        self.apply_btn.connect("clicked", self.on_apply)
+        btn_box.append(self.apply_btn)
+
+        key_controller = Gtk.EventControllerKey()
+        key_controller.connect("key-pressed", self.on_key_pressed)
+        self.add_controller(key_controller)
+
+        self.load_backgrounds()
+
+    def load_backgrounds(self):
+        wallpaper_dir = self.config.get("backgrounds_path", "/usr/share/backgrounds")
+        if not os.path.isdir(wallpaper_dir):
+            print(f"ERR: {wallpaper_dir} directory not found", file=sys.stderr)
+            return
+
+        supported_exts = (".png", ".jpg", ".jpeg", ".webp")
+        for f in sorted(os.listdir(wallpaper_dir)):
+            if f.lower().endswith(supported_exts):
+                full_path = os.path.join(wallpaper_dir, f)
+                self.wallpapers.append(full_path)
+
+        for path in self.wallpapers:
+            self.create_placeholder_item(path)
+
+        self.executor = ThreadPoolExecutor(max_workers=4)
+        for path in self.wallpapers:
+            self.executor.submit(self.load_thumbnail_async, path)
+
+    def create_placeholder_item(self, path):
+        item_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        item_box.set_name("grid-item")
+
+        frame = Gtk.Box()
+        frame.set_name("preview-frame")
+        item_box.append(frame)
+
+        picture = Gtk.Picture()
+        picture.set_name("preview")
+        picture.set_size_request(self.thumb_w, self.thumb_h)
+        picture.set_content_fit(Gtk.ContentFit.COVER)
+        frame.append(picture)
+
+        child = Gtk.FlowBoxChild()
+        child.set_child(item_box)
+        child.set_name("grid-child")
+        child.wallpaper_path = path
+
+        self.flowbox.append(child)
+        self.grid_items[path] = picture
+
+    def load_thumbnail_async(self, path):
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                path, self.thumb_w, self.thumb_h, True
+            )
+            GLib.idle_add(self.apply_thumbnail, path, pixbuf)
+        except GLib.Error:
+            pass
+
+    def apply_thumbnail(self, path, pixbuf):
+        if path in self.grid_items:
+            self.grid_items[path].set_pixbuf(pixbuf)
+
+    def on_item_activated(self, flowbox, child):
+        self.selected_path = child.wallpaper_path
+        self.filename_lbl.set_label(os.path.basename(self.selected_path))
+        self.apply_btn.set_sensitive(True)
+        self.apply_btn.grab_focus()
+
+    def on_key_pressed(self, controller, keyval, keycode, state):
+        if keyval == Gdk.KEY_Escape:
+            self.close()
+            return True
+        return False
+
+    def on_apply(self, button):
+        if not self.selected_path:
+            return
+
+        if self.config.get("use_script", False):
+            script_path = self.config.get("script_path", "")
+            if not os.path.isfile(script_path):
+                print(f"ERR: {script_path} not found", file=sys.stderr)
+                self.close()
+                return
+
+            try:
+                subprocess.Popen([script_path, self.selected_path])
+            except OSError as e:
+                print(f"ERR: failed to run script: {e}", file=sys.stderr)
+        else:
+            self.set_wallpaper_fallback(self.selected_path)
+
+        self.close()
+
+    def set_wallpaper_fallback(self, path):
+        swww_cmd = ["swww", "img", path]
+        try:
+            subprocess.Popen(swww_cmd)
+            return
+        except FileNotFoundError:
+            pass
+
+        hyprpaper_cmd = [
+            "hyprctl",
+            "hyprpaper",
+            "wallpaper",
+            f",{path}",
+        ]
+        try:
+            subprocess.Popen(hyprpaper_cmd)
+            return
+        except FileNotFoundError:
+            pass
+
+        print(
+            "watrpicker: failed to set background automatically, no swww or hyprpaper detected",
+            file=sys.stderr,
+        )
+
+
+class BgSelectorApp(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
+        self.config = load_config()
+
+    def do_activate(self):
+        load_css()
+        win = BgSelectorWindow(self, self.config)
+        win.present()
+
+
+def main():
+    app = BgSelectorApp()
+    sys.exit(app.run([]))
+
+
+if __name__ == "__main__":
+    main()

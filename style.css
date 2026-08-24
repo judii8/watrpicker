@@ -1,0 +1,141 @@
+@define-color background #282a36;
+@define-color foreground #f8f8f2;
+@define-color color2 #bd93f9;
+@define-color color8 #6272a4;
+@define-color color10 #44475a;
+@define-color color11 #f8f8f2;
+@define-color color15 #ffffff;
+
+@import url("../../.cache/wal/colors-waybar.css");
+
+* {
+    font-family: "JetBrainsMono Nerd Font", sans-serif;
+    font-size: 14px;
+    font-weight: bold;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    text-shadow: none;
+}
+
+#window {
+    background-color: alpha(@background, 0.92);
+    color: @foreground;
+    border-radius: 14px;
+    border: 1px solid alpha(@color10, 0.45);
+}
+
+#outer-box {
+    margin: 14px;
+    background-color: transparent;
+}
+
+#menu-title {
+    color: @color11;
+    font-weight: bold;
+    font-size: 16px;
+}
+
+#grid-scroll {
+    border-radius: 10px;
+    background-color: alpha(@color10, 0.02);
+    border: 1px solid alpha(@color8, 0.15);
+}
+
+/* Hide styling overlays on structural GTK scrollports */
+#grid-scroll viewport {
+    background-color: transparent;
+}
+
+#wallpaper-grid {
+    padding: 10px;
+}
+
+/* Grid layout child styles */
+#grid-child {
+    padding: 6px;
+    border-radius: 10px;
+    background-color: transparent;
+    transition: all 0.15s ease;
+}
+
+#grid-child:hover {
+    background-color: alpha(@color11, 0.08);
+}
+
+#grid-child:selected {
+    background-color: alpha(@color2, 0.2);
+    box-shadow: 0 0 0 1px alpha(@color10, 0.3);
+}
+
+#preview-frame {
+    border-radius: 8px;
+    border: 1px solid alpha(@color8, 0.25);
+    background-color: alpha(@color10, 0.08);
+    padding: 3px;
+}
+
+#preview {
+    border-radius: 6px;
+}
+
+#filename {
+    color: @color11;
+    font-weight: bold;
+}
+
+#bottom-bar {
+    background-color: transparent;
+}
+
+#button-box {
+    background-color: transparent;
+}
+
+#cancel-button,
+#apply-button {
+    padding: 8px 16px;
+    border-radius: 10px;
+    color: @foreground;
+    background-color: alpha(@color10, 0.08);
+    background-image: none;
+    border: 1px solid alpha(@color8, 0.25);
+    outline: none;
+    transition: all 0.15s ease;
+}
+
+#cancel-button label,
+#apply-button label {
+    color: inherit;
+}
+
+#cancel-button:hover {
+    color: @color11;
+    background-color: alpha(@color11, 0.1);
+    box-shadow: 0 0 0 1px alpha(@color10, 0.25);
+}
+
+#apply-button {
+    color: @color15;
+    background-color: alpha(@color2, 0.3);
+    border: 1px solid alpha(@color10, 0.45);
+}
+
+#apply-button:sensitive {
+    opacity: 1.0;
+}
+
+#apply-button:hover:sensitive {
+    background-color: alpha(@color2, 0.45);
+    box-shadow:
+        0 0 0 1px alpha(@color10, 0.45),
+        0 1px 0 rgba(255, 255, 255, 0.08) inset,
+        0 -1px 0 rgba(0, 0, 0, 0.25) inset;
+}
+
+/* Dim the action button if no background choice is active */
+#apply-button:disabled {
+    opacity: 0.4;
+    background-color: alpha(@color10, 0.04);
+    border-color: alpha(@color8, 0.1);
+}
