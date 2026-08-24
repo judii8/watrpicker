@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Watrpaper
+Comment=GTK4 wallpaper picker with CSS styling support
+Exec=watrpaper
+Terminal=false
+Categories=Utility;Settings;
+NoDisplay=false
